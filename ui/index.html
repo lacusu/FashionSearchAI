@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fashion Search</title>
+  <style>
+    :root { --fg:#222; --muted:#666; --line:#ddd; --bg:#fafafa; }
+    body { font-family: Arial, sans-serif; color:var(--fg); margin:0; padding:32px 24px; background:#fff; }
+    h1 { font-size:40px; margin:0 0 18px; }
+    .toolbar { display:flex; gap:12px; margin-bottom:12px; }
+    input { flex:1; padding:14px; font-size:18px; border:1px solid var(--line); border-radius:8px; }
+    button { padding:14px 18px; font-size:16px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; }
+    button:disabled { opacity:0.6; cursor:not-allowed; }
+
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap:16px; }
+    .card { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--bg); }
+    .imgwrap { width:100%; aspect-ratio:3/2; background:#eee; display:flex; align-items:center; justify-content:center; }
+    .imgwrap img { width:100%; height:100%; object-fit:contain; display:block; }
+    .content { padding:12px 14px; }
+    .title { font-weight:700; font-size:16px; line-height:1.25; margin:4px 0 8px; }
+    .sub { font-size:13px; color:var(--muted); }
+    .reason { margin-top:8px; font-size:13px; color:#2f6f2f; }
+
+    /* Loading indicator */
+    .loading { display:none; align-items:center; gap:10px; margin:14px 0; }
+    .loading.show { display:flex; }
+    .spinner {
+      width:18px; height:18px; border:2px solid #bbb; border-top-color:#333;
+      border-radius:50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Skeletons */
+    .skel { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#f2f2f2; }
+    .skel .imgwrap { background:#e9e9e9; }
+    .skel .content > div { height:12px; background:#e0e0e0; margin:8px 0; border-radius:6px; }
+    .skel .content > div:first-child { height:16px; width:70%; }
+    .skel .content > div:nth-child(2) { width:50%; }
+    .skel .content > div:nth-child(3) { width:60%; }
+
+    .section { margin-top:28px; }
+
+    /* Side-by-side JSON comparison */
+    .compare { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
+    .panel { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+    .panel h3 { margin:0; padding:10px 12px; border-bottom:1px solid var(--line); font-size:16px; background:#fafafa; }
+    .panel pre { margin:0; padding:10px 12px; white-space:pre-wrap; font-size:12px; background:#fff; max-height:420px; overflow:auto; }
+
+    /* Responsive fallback for narrow screens */
+    @media (max-width: 900px){
+      .compare { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Fashion Search</h1>
+
+<div class="toolbar">
+  <input id="q" placeholder="e.g. red party dress, blue denim shirt men, black running shoes" />
+  <button onclick="searchNow()">Search</button>
+</div>
+
+<div id="loading" class="loading" aria-live="polite">
+  <div class="spinner"></div>
+  <div>Searching…</div>
+</div>
+
+<div id="cards" class="grid"></div>
+
+<div class="section">
+  <div class="compare">
+    <div class="panel">
+      <h3>Search Layer (Top 3 Results)</h3>
+      <pre id="json-search"></pre>
+    </div>
+    <div class="panel">
+      <h3>Generation Layer (Final Generated Answer)</h3>
+      <pre id="json-gen"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+function placeholder(img){
+  img.src = "";
+  img.parentElement.style.background = "#ddd";
+  img.alt = "Image unavailable";
+}
+
+function renderSkeletons(n=3){
+  const cards = document.getElementById("cards");
+  cards.innerHTML = "";
+  for(let i=0;i<n;i++){
+    const el = document.createElement("div");
+    el.className = "card skel";
+    el.innerHTML = `
+      <div class="imgwrap"></div>
+      <div class="content">
+        <div></div><div></div><div></div>
+      </div>`;
+    cards.appendChild(el);
+  }
+}
+
+async function searchNow(){
+  const qInput = document.getElementById("q");
+  const q = qInput.value.trim();
+  if(!q) return;
+
+  const btn = document.querySelector(".toolbar button");
+  const loading = document.getElementById("loading");
+  const cards = document.getElementById("cards");
+  const jsonSearch = document.getElementById("json-search");
+  const jsonGen = document.getElementById("json-gen");
+
+  // start loading
+  btn.disabled = true;
+  qInput.disabled = true;
+  loading.classList.add("show");
+  jsonSearch.textContent = "";
+  jsonGen.textContent = "";
+  renderSkeletons(3);
+
+  try {
+    const [searchRes, recRes] = await Promise.all([
+      fetch(`/search?q=${encodeURIComponent(q)}&k=3`).then(r=>r.json()),
+      fetch(`/recommend`, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ query:q, k:3 })
+      }).then(r=>r.json())
+    ]);
+
+    // Update left panel JSON with raw search results
+    jsonSearch.textContent = JSON.stringify(searchRes, null, 2);
+
+    // Parse generated JSON for right panel and to show “Why” on cards
+    let reasonsByKey = {};
+    try {
+      const gen = JSON.parse(recRes.generated);
+      (gen.recommendations || []).forEach(p=>{
+        const key = `${(p.name||"").toLowerCase()}|${(p.brand||"").toLowerCase()}`;
+        reasonsByKey[key] = p.reason || "";
+      });
+      jsonGen.textContent = recRes.generated;
+    } catch(e){
+      jsonGen.textContent = JSON.stringify(recRes, null, 2);
+    }
+
+    // Render top cards with “Why” reason (if available)
+    cards.innerHTML = "";
+    (searchRes.results || []).forEach(p=>{
+      const key = `${(p.name||"").toLowerCase()}|${(p.brand||"").toLowerCase()}`;
+      const reason = reasonsByKey[key] || "";
+      const imgSrc = p.image || "";
+      const el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `
+        <div class="imgwrap">
+          <img loading="lazy" src="${imgSrc}" onerror="placeholder(this)" alt="">
+        </div>
+        <div class="content">
+          <div class="title">${p.name || "Unnamed product"}</div>
+          <div class="sub">${p.brand || "Brand NA"} — ${p.colour || "Colour NA"} — ₹${p.price || "NA"}</div>
+          ${reason ? `<div class="reason">Why: ${reason}</div>` : ""}
+        </div>
+      `;
+      cards.appendChild(el);
+    });
+
+    if (!searchRes.results || searchRes.results.length === 0) {
+      cards.innerHTML = `<div style="color:#666;">No results for “${q}”. Try rephrasing your query.</div>`;
+    }
+
+  } catch (err){
+    jsonGen.textContent = `Error: ${err}`;
+    jsonSearch.textContent = `Error: ${err}`;
+    cards.innerHTML = `<div style="color:#c00;">Request failed. Please retry.</div>`;
+  } finally {
+    // stop loading
+    loading.classList.remove("show");
+    btn.disabled = false;
+    qInput.disabled = false;
+  }
+}
+</script>
+
+</body>
+</html>
