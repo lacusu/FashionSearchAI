@@ -208,3 +208,4 @@ __marimo__/
 .idea
 vector_store/
 data/images
+app/utils/settings.py

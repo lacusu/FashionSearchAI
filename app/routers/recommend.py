@@ -7,22 +7,25 @@ router = APIRouter()
 @router.post("/recommend")
 def recommend(req: RecommendRequest):
     res = retrieval.search(req.query, k=10)
-
-    docs = [
-        {"document": d, "metadata": m}
-        for d, m in zip(res["documents"][0], res["metadatas"][0])
+    pool = [
+        {"document": d, "metadata": m, "similarity": s}
+        for d, m, s in zip(res["documents"][0], res["metadatas"][0], res["similarities"][0])
     ]
+    texts = [str(p["document"]) for p in pool]
+    idxs, scores = reranker.rerank_with_scores(req.query, texts, top_k=req.k)
 
-    ranked_docs = []
-    # Extract texts only for reranker to avoid ndarray issues
-    docs_texts = [str(d["document"]) for d in docs]
-    ranked_texts = reranker.rerank(req.query, docs_texts, top_k=req.k)
-    for txt in ranked_texts:
-        for d in docs:
-            if str(d["document"]) == txt:
-                ranked_docs.append(d)
-                break
+    ranked = []
+    for i, sc in zip(idxs, scores):
+        p = pool[i]
+        ranked.append({
+            "name": p["metadata"].get("name"),
+            "brand": p["metadata"].get("brand"),
+            "price": p["metadata"].get("price"),
+            "colour": p["metadata"].get("colour"),
+            "image": p["metadata"].get("image"),
+            "similarity": round(float(p["similarity"]), 4),
+            "rerank_score": round(float(sc), 4),
+        })
 
-    gen_result = generation.generate(req.query, ranked_docs)
-
+    gen_result = generation.generate(req.query, ranked)
     return {"query": req.query, "top_k": req.k, "generated": gen_result}

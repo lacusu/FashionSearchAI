@@ -1,29 +1,29 @@
 import numpy as np
 from app.services.embeddings import encode
 
-def rerank(query, docs, top_k=3):
-    # Embed query and documents
-    qvec = encode([query])[0]
-    doc_vecs = encode(docs)
+def _cosine(a, b):
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b, axis=1, keepdims=True)
+    return b @ a  # (n,) sims
 
-    # Normalize for cosine similarity
-    qvec = qvec / np.linalg.norm(qvec)
-    doc_vecs = doc_vecs / np.linalg.norm(doc_vecs, axis=1, keepdims=True)
+def rerank_with_scores(query, docs, top_k=3):
+    qv = encode([query])[0]
+    dv = encode(docs)
+    sims = _cosine(qv, dv)
 
-    sims = doc_vecs @ qvec  # cosine similarity
-
-    # Keyword-aware boosting
+    # Keyword-aware boosts (explicit constraints)
     keywords = [w.lower() for w in query.split()]
     bonus = np.zeros_like(sims)
-
     for i, text in enumerate(docs):
-        low = text.lower()
-        for kw in keywords:
-            if kw in low:
-                bonus[i] += 0.10  # small boost for explicit keyword match
+      low = text.lower()
+      for kw in keywords:
+        if kw and kw in low:
+          bonus[i] += 0.10
 
-    final_scores = sims + bonus
+    final = sims + bonus
+    order = np.argsort(final)[::-1][:top_k]
+    return order.tolist(), final[order].tolist()
 
-    # Sort and select top_k
-    idxs = np.argsort(final_scores)[::-1][:top_k]
+def rerank(query, docs, top_k=3):
+    idxs, _ = rerank_with_scores(query, docs, top_k)
     return [docs[i] for i in idxs]

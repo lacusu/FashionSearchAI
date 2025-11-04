@@ -44,7 +44,7 @@
     .compare { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
     .panel { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
     .panel h3 { margin:0; padding:10px 12px; border-bottom:1px solid var(--line); font-size:16px; background:#fafafa; }
-    .panel pre { margin:0; padding:10px 12px; white-space:pre-wrap; font-size:12px; background:#fff; max-height:420px; overflow:auto; }
+    .panel pre { margin:0; padding:10px 12px; white-space:pre-wrap; font-size:12px; background:#fff; max-height:720px; overflow:auto; }
 
     /* Responsive fallback for narrow screens */
     @media (max-width: 900px){
@@ -163,7 +163,7 @@ async function searchNow(){
         <div class="content">
           <div class="title">${p.name || "Unnamed product"}</div>
           <div class="sub">${p.brand || "Brand NA"} — ${p.colour || "Colour NA"} — ₹${p.price || "NA"}</div>
-          ${reason ? `<div class="reason">Why: ${reason}</div>` : ""}
+          ${reason ? `<div class="reason">${reason}</div>` : ""}
         </div>
       `;
       cards.appendChild(el);
