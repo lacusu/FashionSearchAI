@@ -25,3 +25,6 @@ CACHE_DIR = str(BASE_DIR / "cache")
 # Images
 IMAGES_DIR = str(BASE_DIR / "data" / "images")
 IMAGE_URL_PREFIX = "/images"
+# LangChain toggle
+USE_LANGCHAIN = os.getenv("USE_LANGCHAIN", "true").lower() == "true"
+LC_COLLECTION = os.getenv("LC_COLLECTION", "fashion_hybrid")
