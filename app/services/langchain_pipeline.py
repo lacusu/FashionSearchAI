@@ -1,55 +1,66 @@
 from typing import List, Dict, Any
+
+from chromadb.app import settings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma as LCChroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
-from app.utils.settings import CHROMA_DIR, EMB_MODEL, LC_COLLECTION, OPENAI_API_KEY
+
+from app.utils.settings import CHROMA_DIR, EMB_MODEL, LC_COLLECTION, OPENAI_API_KEY, GEN_MODEL
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Reuse the same embedding model you used to build the DB
+# LangChain embedding wrapper, reusing your SBERT model
 _embedder = HuggingFaceEmbeddings(model_name=EMB_MODEL)
 
+
 def get_vectorstore() -> LCChroma:
-    # This attaches to your existing persisted Chroma collection
+    """Attach LangChain to the existing persisted Chroma collection."""
     return LCChroma(
         collection_name=LC_COLLECTION,
         persist_directory=CHROMA_DIR,
         embedding_function=_embedder,
     )
 
-def lc_search(query: str, k: int = 10) -> Dict[str, Any]:
-    """Search via LangChain VectorStore wrapper (reuses existing Chroma DB)."""
+
+def lc_search(query: str, k: int = 10) -> List[Dict[str, Any]]:
+    """
+    Search via LangChain's Chroma wrapper.
+    Returns a list of dicts with metadata and similarity.
+    """
     vs = get_vectorstore()
-    # returns list[(Document, score)]
     docs_scores = vs.similarity_search_with_relevance_scores(query, k=k)
-    # Prepare a Search-layer-like response
-    out = []
+
+    results: List[Dict[str, Any]] = []
     for doc, score in docs_scores:
         meta = doc.metadata or {}
-        out.append({
+        results.append({
             "name": meta.get("name"),
             "brand": meta.get("brand"),
             "price": meta.get("price"),
             "colour": meta.get("colour"),
             "image": meta.get("image"),
-            "similarity": float(score),        # LC returns similarity (higher=better)
-            "rerank_score": float(score),      # keep field for UI compatibility
+            "similarity": float(score),  # LC uses relevance score (higher = better)
             "document": doc.page_content,
         })
-    return {"query": query, "results": out}
+    return results
 
-# ----- Generation via LangChain (optional OpenAI) -----
+
+# ---------- Generation layer (LangChain LLM + fallback) ----------
 
 _GEN_PROMPT = PromptTemplate.from_template(
     """You are a fashion search assistant. Write ONLY valid JSON.
 
 Query: "{query}"
 
-Use the retrieved products (with similarity scores) to produce a concise JSON:
+You are given a list of retrieved products with similarity scores:
+
+{context}
+
+Return JSON of the form:
 {{
   "query": "{query}",
-  "final_answer": "short one-paragraph rationale",
+  "final_answer": "one short paragraph explaining why these items match the query",
   "recommendations": [
     {{
       "name": "...",
@@ -59,31 +70,32 @@ Use the retrieved products (with similarity scores) to produce a concise JSON:
       "image": "<path_or_url>",
       "similarity": <float>,
       "rerank_score": <float>,
-      "reason": "short justification (color/type/gender/semantic)"
+      "reason": "short justification based on color, type, gender, and semantic fit"
     }}
   ]
 }}
 
-Keep it to the top 3 items, be precise, and never include markdown.
+Use at most 3 recommendations. Do not include any text outside the JSON.
 """
 )
 
+
 def lc_generate(query: str, ranked_items: List[Dict[str, Any]]) -> str:
     """
-    If OPENAI_API_KEY is present -> use ChatOpenAI via LangChain.
-    Else -> produce the same rule-based JSON you already have.
+    If OPENAI_API_KEY is present, generate via LangChain ChatOpenAI.
+    Otherwise, fall back to your existing rule-based JSON generator.
     """
-    # If no key, reuse your fallback
+    # No API key -> use your existing fallback generation
     if not OPENAI_API_KEY:
-        from app.services.generation import generate as fallback_gen
-        # generation.generate expects ranked_docs fields we already have
-        return fallback_gen(query, ranked_items)
+        from app.services.generation import generate as fallback_generate
+        return fallback_generate(query, ranked_items)
 
-    # LLM path (OpenAI via LangChain)
     try:
         from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-        context_json = [
+
+        llm = ChatOpenAI(model=GEN_MODEL, temperature=0.2)
+
+        context = [
             {
                 "name": it.get("name"),
                 "brand": it.get("brand"),
@@ -92,12 +104,15 @@ def lc_generate(query: str, ranked_items: List[Dict[str, Any]]) -> str:
                 "image": it.get("image"),
                 "similarity": it.get("similarity"),
                 "rerank_score": it.get("rerank_score"),
-            } for it in ranked_items[:6]
+            }
+            for it in ranked_items[:6]
         ]
-        prompt = _GEN_PROMPT.format(query=query, context=context_json)
+
+        prompt = _GEN_PROMPT.format(query=query, context=context)
         resp = llm.invoke(prompt)
         return resp.content
+
     except Exception as e:
         logger.warning(f"LangChain LLM failed, using fallback. Error: {e}")
-        from app.services.generation import generate as fallback_gen
-        return fallback_gen(query, ranked_items)
+        from app.services.generation import generate as fallback_generate
+        return fallback_generate(query, ranked_items)
